@@ -9,5 +9,8 @@ pandas-ta==0.3.14b
 yfinance==0.2.65
 python-telegram-bot==22.3
 
+# Environment variables
+python-dotenv==1.0.0
+
 # Utilities (dev/test opcional)
 pytest>=7.0.0
