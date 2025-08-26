@@ -29,6 +29,7 @@ from telegram import Bot
 # ---------------- CONFIG ----------------
 DB_FILE = Path("prices.db")
 TICKERS: List[str] = ["AAPL", "MSFT", "NVDA"]
+TIMEFRAMES: List[str] = ["1d", "1wk", "1mo"]  # daily, weekly, monthly
 BACKFILL_YEARS = 3
 UPDATE_PERIOD = "60d"
 REQUEST_DELAY = 1.0
@@ -55,11 +56,34 @@ def get_conn():
 def init_db_sync():
     with get_conn() as conn:
         cur = conn.cursor()
+        
+        # Tabla unificada para precios con múltiples timeframes
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                adj_close REAL,
+                volume INTEGER,
+                created_at TEXT NOT NULL,
+                UNIQUE(ticker, timeframe, date)
+            )
+            """
+        )
+        
+        # Tabla de alerts
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
                 date TEXT NOT NULL,
                 color TEXT NOT NULL,
                 bx_value REAL,
@@ -67,66 +91,116 @@ def init_db_sync():
             )
             """
         )
+        
+        # Tabla de state (último color conocido / estado)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS state (
-                ticker TEXT PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
                 last_color TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                PRIMARY KEY (ticker, timeframe)
             )
             """
         )
+        
+        # Índices para optimizar consultas
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_prices_ticker_timeframe_date ON prices(ticker, timeframe, date)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_prices_timeframe_date ON prices(timeframe, date)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ticker_timeframe_date ON alerts(ticker, timeframe, date)")
+        
         conn.commit()
 
-def df_from_sql_sync(ticker: str) -> Optional[pd.DataFrame]:
+def df_from_sql_sync(ticker: str, timeframe: str = "1d") -> Optional[pd.DataFrame]:
+    """Obtiene datos de un ticker y timeframe específico"""
     with get_conn() as conn:
         try:
-            df = pd.read_sql(f"SELECT * FROM prices_{ticker}", conn, index_col="date", parse_dates=["date"])
-            df.index.name = "date"
-            return df.sort_index()
-        except Exception:
+            df = pd.read_sql("""
+                SELECT date, open, high, low, close, adj_close, volume
+                FROM prices 
+                WHERE ticker = ? AND timeframe = ?
+                ORDER BY date
+            """, conn, params=[ticker, timeframe], 
+                index_col="date", parse_dates=["date"])
+            
+            # Asegurar que las columnas estén en el formato esperado
+            if df is not None and not df.empty:
+                # Renombrar adj_close a Adj Close para compatibilidad con yfinance
+                if 'adj_close' in df.columns:
+                    df = df.rename(columns={'adj_close': 'Adj Close'})
+                # Asegurar que Close esté presente
+                if 'close' in df.columns:
+                    df = df.rename(columns={'close': 'Close'})
+            
+            return df
+        except Exception as e:
+            print(f"[ERROR] Error reading data for {ticker} {timeframe}: {e}")
             return None
 
-def save_df_to_sql_sync(df: pd.DataFrame, ticker: str):
+def save_df_to_sql_sync(df: pd.DataFrame, ticker: str, timeframe: str):
+    """Guarda DataFrame en la tabla unificada"""
     if df is None or df.empty:
         return
+    
     df_to_save = df.copy()
-    df_to_save.index = pd.to_datetime(df_to_save.index)
+    
+    # Normalizar nombres de columnas (yfinance usa "Adj Close", tabla usa "adj_close")
+    if 'Adj Close' in df_to_save.columns:
+        df_to_save = df_to_save.rename(columns={'Adj Close': 'adj_close'})
+    
+    df_to_save['ticker'] = ticker
+    df_to_save['timeframe'] = timeframe
+    df_to_save['created_at'] = dt.datetime.utcnow().isoformat()
+    df_to_save.reset_index(inplace=True)
+    
     with get_conn() as conn:
-        df_to_save.to_sql(f"prices_{ticker}", conn, if_exists="replace", index_label="date")
+        # Usar replace para evitar duplicados
+        df_to_save.to_sql('prices', conn, if_exists='append', index=False, method='multi')
 
-def backfill_ticker_sync(ticker: str, years: int = BACKFILL_YEARS):
+def backfill_ticker_sync(ticker: str, timeframe: str, years: int = BACKFILL_YEARS):
+    """Backfill inicial para un ticker y timeframe específico"""
     period = f"{years}y"
-    print(f"[BACKFILL] {ticker} period={period}")
+    print(f"[BACKFILL] {ticker} {timeframe} period={period}")
     try:
-        df = yf.download(ticker, period=period, interval="1d", auto_adjust=False, multi_level_index=False, progress=False)
+        df = yf.download(ticker, period=period, interval=timeframe, 
+                        auto_adjust=False, multi_level_index=False, progress=False)
         if df is None or df.empty:
-            print(f"[WARN] Backfill: no data for {ticker}")
+            print(f"[WARN] Backfill: no data for {ticker} {timeframe}")
             return
+        
         df.index = pd.to_datetime(df.index)
-        save_df_to_sql_sync(df, ticker)
-        print(f"[BACKFILL] {ticker} saved rows={len(df)}")
+        save_df_to_sql_sync(df, ticker, timeframe)
+        print(f"[BACKFILL] {ticker} {timeframe} saved rows={len(df)}")
     except Exception as e:
-        print(f"[ERROR] backfill {ticker}: {e}")
+        print(f"[ERROR] backfill {ticker} {timeframe}: {e}")
 
-def incremental_update_ticker_sync(ticker: str, period: str = UPDATE_PERIOD):
-    print(f"[UPDATE] {ticker} period={period}")
+def incremental_update_ticker_sync(ticker: str, timeframe: str, period: str = UPDATE_PERIOD):
+    """Actualización incremental para un ticker y timeframe específico"""
+    print(f"[UPDATE] {ticker} {timeframe} period={period}")
     try:
-        existing = df_from_sql_sync(ticker)
-        df_new = yf.download(ticker, period=period, interval="1d", auto_adjust=False, multi_level_index=False, progress=False)
+        existing = df_from_sql_sync(ticker, timeframe)
+        df_new = yf.download(ticker, period=period, interval=timeframe, 
+                           auto_adjust=False, multi_level_index=False, progress=False)
+        
         if df_new is None or df_new.empty:
-            print(f"[WARN] No incremental data for {ticker}")
+            print(f"[WARN] No incremental data for {ticker} {timeframe}")
             return
+        
         df_new.index = pd.to_datetime(df_new.index)
+        
         if existing is None or existing.empty:
             merged = df_new
         else:
+            # Append only rows after last existing index
             merged = pd.concat([existing, df_new[~df_new.index.isin(existing.index)]])
             merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-        save_df_to_sql_sync(merged, ticker)
-        print(f"[UPDATE] {ticker} rows={len(merged)} last={merged.index.max().date()}")
+        
+        # Guardar solo los datos nuevos, no todo el merged
+        save_df_to_sql_sync(df_new, ticker, timeframe)
+        print(f"[UPDATE] {ticker} {timeframe} new rows={len(df_new)} last={df_new.index.max().date()}")
     except Exception as e:
-        print(f"[ERROR] incremental_update {ticker}: {e}")
+        print(f"[ERROR] incremental_update {ticker} {timeframe}: {e}")
 
 # ---------------- indicator fallbacks (sync) ----------------
 def _ema(series: pd.Series, length: int) -> pd.Series:
@@ -221,25 +295,27 @@ def compute_bx_trender_sync(df: pd.DataFrame) -> pd.DataFrame:
     return dfc
 
 # ---------------- state & alerts (sync DB) ----------------
-def get_last_color_db_sync(ticker: str) -> Optional[str]:
+def get_last_color_db_sync(ticker: str, timeframe: str) -> Optional[str]:
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT last_color FROM state WHERE ticker = ?", (ticker,))
+        cur.execute("SELECT last_color FROM state WHERE ticker = ? AND timeframe = ?", (ticker, timeframe))
         r = cur.fetchone()
         return r[0] if r else None
 
-def set_last_color_db_sync(ticker: str, color: str):
+def set_last_color_db_sync(ticker: str, timeframe: str, color: str):
     now = dt.datetime.utcnow().isoformat()
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO state (ticker, last_color, updated_at) VALUES (?, ?, ?)", (ticker, color, now))
+        cur.execute("INSERT OR REPLACE INTO state (ticker, timeframe, last_color, updated_at) VALUES (?, ?, ?, ?)", 
+                   (ticker, timeframe, color, now))
         conn.commit()
 
-def save_alert_db_sync(ticker: str, date: str, color: str, bx_value: Optional[float]):
+def save_alert_db_sync(ticker: str, timeframe: str, date: str, color: str, bx_value: Optional[float]):
     now = dt.datetime.utcnow().isoformat()
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("INSERT INTO alerts (ticker, date, color, bx_value, created_at) VALUES (?, ?, ?, ?, ?)", (ticker, date, color, bx_value, now))
+        cur.execute("INSERT INTO alerts (ticker, timeframe, date, color, bx_value, created_at) VALUES (?, ?, ?, ?, ?, ?)", 
+                   (ticker, timeframe, date, color, bx_value, now))
         conn.commit()
 
 # ---------------- notifier (async using await) ----------------
@@ -271,29 +347,34 @@ async def send_telegram_async(msg: str, max_retries: int = 2) -> bool:
     return False
 
 # ---------------- main async flow ----------------
-async def run_backfill_and_updates_async(tickers: List[str]):
+async def run_backfill_and_updates_async(tickers: List[str], timeframes: List[str]):
+    """Backfill y actualización para múltiples tickers y timeframes"""
     needs_backfill = False
     if not DB_FILE.exists():
         needs_backfill = True
     else:
-        tbl = await asyncio.to_thread(df_from_sql_sync, tickers[0])
+        # Check if we have data for first ticker and timeframe
+        tbl = await asyncio.to_thread(df_from_sql_sync, tickers[0], timeframes[0])
         if tbl is None or tbl.empty:
             needs_backfill = True
 
     if needs_backfill:
-        print("[INIT] Backfill inicial (esto puede tardar unos segundos por ticker)...")
+        print("[INIT] Backfill inicial para todos los timeframes...")
         for t in tickers:
-            await asyncio.to_thread(backfill_ticker_sync, t, BACKFILL_YEARS)
-            await asyncio.sleep(REQUEST_DELAY)
+            for tf in timeframes:
+                await asyncio.to_thread(backfill_ticker_sync, t, tf, BACKFILL_YEARS)
+                await asyncio.sleep(REQUEST_DELAY)
     else:
         print("[INIT] DB existente. Saltando backfill.")
 
     print("[INIT] Actualizando incrementalmente...")
     for t in tickers:
-        await asyncio.to_thread(incremental_update_ticker_sync, t, UPDATE_PERIOD)
-        await asyncio.sleep(REQUEST_DELAY)
+        for tf in timeframes:
+            await asyncio.to_thread(incremental_update_ticker_sync, t, tf, UPDATE_PERIOD)
+            await asyncio.sleep(REQUEST_DELAY)
 
-async def process_and_notify_async(tickers: List[str]):
+async def process_and_notify_async(tickers: List[str], timeframes: List[str]):
+    """Procesa y notifica para múltiples timeframes"""
     human_map = {
         "green_hh": "GREEN (Higher High)",
         "green_lh": "GREEN (Lower High)",
@@ -302,44 +383,45 @@ async def process_and_notify_async(tickers: List[str]):
     }
 
     for t in tickers:
-        try:
-            df = await asyncio.to_thread(df_from_sql_sync, t)
-            if df is None or df.empty:
-                print(f"[WARN] Sin datos en DB para {t}")
-                continue
-            df_calc = await asyncio.to_thread(compute_bx_trender_sync, df)
-        except Exception as e:
-            print(f"[ERROR] cálculo para {t}: {e}")
-            dbg_name = f"debug_{t}.csv"
+        for tf in timeframes:
             try:
-                await asyncio.to_thread(df.to_csv, dbg_name)
-                print(f"  (datos guardados en {dbg_name})")
-            except Exception:
-                pass
-            continue
+                df = await asyncio.to_thread(df_from_sql_sync, t, tf)
+                if df is None or df.empty:
+                    print(f"[WARN] Sin datos en DB para {t} {tf}")
+                    continue
+                df_calc = await asyncio.to_thread(compute_bx_trender_sync, df)
+            except Exception as e:
+                print(f"[ERROR] cálculo para {t} {tf}: {e}")
+                dbg_name = f"debug_{t}_{tf}.csv"
+                try:
+                    await asyncio.to_thread(df.to_csv, dbg_name)
+                    print(f"  (datos guardados en {dbg_name})")
+                except Exception:
+                    pass
+                continue
 
-        last_idx = df_calc.index.max()
-        last_date = last_idx.date().isoformat()
-        bx_state = df_calc.loc[last_idx, "bx_state"]
-        bx_val = df_calc.loc[last_idx, "bx_value"] if not pd.isna(df_calc.loc[last_idx, "bx_value"]) else None
+            last_idx = df_calc.index.max()
+            last_date = last_idx.date().isoformat()
+            bx_state = df_calc.loc[last_idx, "bx_state"]
+            bx_val = df_calc.loc[last_idx, "bx_value"] if not pd.isna(df_calc.loc[last_idx, "bx_value"]) else None
 
-        if bx_state is None:
-            print(f"{t} {last_date} -> estado indeterminado")
-            continue
+            if bx_state is None:
+                print(f"{t} {tf} {last_date} -> estado indeterminado")
+                continue
 
-        prev = await asyncio.to_thread(get_last_color_db_sync, t)
-        if prev != bx_state:
-            human = human_map.get(bx_state, bx_state)
-            msg = f"{t} — BX Trender daily cambió a {human} el {last_date}\nBX_value={bx_val:.6f}"
-            sent = await send_telegram_async(msg)
-            if sent:
-                await asyncio.to_thread(save_alert_db_sync, t, last_date, bx_state, bx_val)
-                await asyncio.to_thread(set_last_color_db_sync, t, bx_state)
-                print(f"[ALERT] {t} {last_date} -> {bx_state}")
+            prev = await asyncio.to_thread(get_last_color_db_sync, t, tf)
+            if prev != bx_state:
+                human = human_map.get(bx_state, bx_state)
+                msg = f"{t} {tf} — BX Trender cambió a {human} el {last_date}\nBX_value={bx_val:.6f}"
+                sent = await send_telegram_async(msg)
+                if sent:
+                    await asyncio.to_thread(save_alert_db_sync, t, tf, last_date, bx_state, bx_val)
+                    await asyncio.to_thread(set_last_color_db_sync, t, tf, bx_state)
+                    print(f"[ALERT] {t} {tf} {last_date} -> {bx_state}")
+                else:
+                    print(f"[WARN] No se guardó alerta para {t} {tf} porque no se pudo enviar mensaje.")
             else:
-                print(f"[WARN] No se guardó alerta para {t} porque no se pudo enviar mensaje.")
-        else:
-            print(f"{t} {last_date} -> sin cambio ({bx_state})")
+                print(f"{t} {tf} {last_date} -> sin cambio ({bx_state})")
 
 async def main_async():
     global bot
@@ -359,10 +441,10 @@ async def main_async():
         print("[WARN] TELEGRAM_TOKEN no configurado.")
 
     # backfill + updates
-    await run_backfill_and_updates_async(TICKERS)
+    await run_backfill_and_updates_async(TICKERS, TIMEFRAMES)
 
     # process and notify
-    await process_and_notify_async(TICKERS)
+    await process_and_notify_async(TICKERS, TIMEFRAMES)
 
     print("Done.")
 
