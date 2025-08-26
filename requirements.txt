@@ -1,1 +1,13 @@
-print("Hola, Cursor + Python 🚀")
+# Core
+numpy==1.24.4
+pandas==2.2.3
+
+# Technical indicators (pandas-ta classic) - compatible con numpy < 1.25
+pandas-ta==0.3.14b
+
+# Market data and notifier
+yfinance==0.2.65
+python-telegram-bot==22.3
+
+# Utilities (dev/test opcional)
+pytest>=7.0.0
