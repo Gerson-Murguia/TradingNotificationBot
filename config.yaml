@@ -4,7 +4,7 @@
 # Configuración de la base de datos
 database:
   file: "prices.db"
-  backfill_years: 3
+  backfill_years: 4
   update_period: "60d"
   request_delay: 1.0
 
@@ -32,6 +32,14 @@ telegram:
   chat_id: ""  # Se debe configurar en .env
   max_retries: 3
   retry_delay_base: 2  # Para exponential backoff
+  # Configuración de batching para evitar spam
+  batching:
+    enabled: true
+    max_alerts_per_batch: 5  # Máximo número de alertas por mensaje
+    batch_timeout_seconds: 30  # Tiempo máximo para agrupar alertas
+    critical_states: ["green_hh", "red_ll"]  # Estados que requieren notificación inmediata
+    summary_enabled: true  # Enviar resumen diario
+    summary_time: "18:00"  # Hora para enviar resumen diario (formato HH:MM)
 
 # Configuración de logging
 logging:
@@ -46,3 +54,4 @@ monitoring:
   health_check_interval: 300  # segundos
   metrics_enabled: true
   alert_on_errors: true
+

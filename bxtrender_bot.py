@@ -45,6 +45,13 @@ class BotConfig:
     telegram_chat_id: str
     telegram_max_retries: int
     telegram_retry_delay_base: int
+    # Configuración de batching
+    batching_enabled: bool
+    max_alerts_per_batch: int
+    batch_timeout_seconds: int
+    critical_states: List[str]
+    summary_enabled: bool
+    summary_time: str
     log_level: str
     log_file_level: str
     log_console_level: str
@@ -510,6 +517,164 @@ class DataManager:
             self.logger.error(f"Error en actualización incremental para {ticker} {timeframe}: {e}")
             raise
 
+class NotificationBatch:
+    """Clase para manejar el batching de notificaciones"""
+    
+    def __init__(self, config: BotConfig, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+        self.pending_alerts: List[Dict[str, Any]] = []
+        self.last_batch_time = dt.datetime.now()
+        self.daily_alerts: List[Dict[str, Any]] = []
+        self.last_summary_date = dt.datetime.now().date()
+    
+    def add_alert(self, ticker: str, timeframe: str, date: str, state: str, value: Optional[float]):
+        """Añade una alerta al batch"""
+        alert = {
+            'ticker': ticker,
+            'timeframe': timeframe,
+            'date': date,
+            'state': state,
+            'value': value,
+            'timestamp': dt.datetime.now()
+        }
+        
+        self.pending_alerts.append(alert)
+        self.daily_alerts.append(alert)
+        
+        # Verificar si es un estado crítico que requiere notificación inmediata
+        if state in self.config.critical_states:
+            self.logger.info(f"Estado crítico detectado: {ticker} {timeframe} -> {state}")
+            return True  # Indicar que debe enviarse inmediatamente
+        
+        return False
+    
+    def should_send_batch(self) -> bool:
+        """Determina si se debe enviar el batch actual"""
+        if not self.pending_alerts:
+            return False
+        
+        # Enviar si alcanzamos el máximo de alertas por batch
+        if len(self.pending_alerts) >= self.config.max_alerts_per_batch:
+            return True
+        
+        # Enviar si ha pasado el timeout
+        time_since_last = (dt.datetime.now() - self.last_batch_time).total_seconds()
+        if time_since_last >= self.config.batch_timeout_seconds:
+            return True
+        
+        return False
+    
+    def get_batch_message(self) -> str:
+        """Genera el mensaje del batch actual"""
+        if not self.pending_alerts:
+            return ""
+        
+        human_map = {
+            "green_hh": "🟢💪 LIGHT GREEN",
+            "green_lh": "🟢 GREEN", 
+            "red_hl": "🟠💪 LIGHT RED",
+            "red_ll": "🔴 RED"
+        }
+        
+        # Agrupar por estado para mejor legibilidad
+        alerts_by_state = {}
+        for alert in self.pending_alerts:
+            state = alert['state']
+            if state not in alerts_by_state:
+                alerts_by_state[state] = []
+            alerts_by_state[state].append(alert)
+        
+        # Construir mensaje
+        lines = ["📊 *BATCH ALERTS - BX Trender*"]
+        
+        for state, alerts in alerts_by_state.items():
+            human_state = human_map.get(state, state)
+            lines.append(f"\n*{human_state}* ({len(alerts)} signals):")
+            
+            for alert in alerts:
+                value_str = f" ({alert['value']:.4f})" if alert['value'] is not None else ""
+                lines.append(f"• {alert['ticker']} {alert['timeframe']} - {alert['date']}{value_str}")
+        
+        lines.append(f"\n_Generated at {dt.datetime.now().strftime('%H:%M:%S')}_")
+        
+        return "\n".join(lines)
+    
+    def get_daily_summary(self) -> str:
+        """Genera el resumen diario de alertas"""
+        if not self.daily_alerts:
+            return ""
+        
+        # Filtrar alertas del día actual
+        today = dt.datetime.now().date()
+        today_alerts = [a for a in self.daily_alerts if a['timestamp'].date() == today]
+        
+        if not today_alerts:
+            return ""
+        
+        human_map = {
+            "green_hh": "🟢💪 LIGHT GREEN",
+            "green_lh": "🟢 GREEN",
+            "red_hl": "🟠💪 LIGHT RED", 
+            "red_ll": "🔴 RED"
+        }
+        
+        # Contar por estado
+        state_counts = {}
+        for alert in today_alerts:
+            state = alert['state']
+            state_counts[state] = state_counts.get(state, 0) + 1
+        
+        lines = [f"📈 *DAILY SUMMARY - {today.strftime('%Y-%m-%d')}*"]
+        lines.append(f"Total signals: {len(today_alerts)}")
+        
+        for state, count in state_counts.items():
+            human_state = human_map.get(state, state)
+            lines.append(f"• {human_state}: {count}")
+        
+        # Top tickers más activos
+        ticker_counts = {}
+        for alert in today_alerts:
+            ticker = alert['ticker']
+            ticker_counts[ticker] = ticker_counts.get(ticker, 0) + 1
+        
+        if ticker_counts:
+            top_tickers = sorted(ticker_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            lines.append(f"\n*Most Active Tickers:*")
+            for ticker, count in top_tickers:
+                lines.append(f"• {ticker}: {count} signals")
+        
+        return "\n".join(lines)
+    
+    def clear_batch(self):
+        """Limpia el batch actual"""
+        self.pending_alerts = []
+        self.last_batch_time = dt.datetime.now()
+    
+    def should_send_daily_summary(self) -> bool:
+        """Determina si se debe enviar el resumen diario"""
+        if not self.config.summary_enabled:
+            return False
+        
+        try:
+            current_time = dt.datetime.now().time()
+            summary_hour, summary_minute = map(int, self.config.summary_time.split(':'))
+            summary_time = dt.time(summary_hour, summary_minute)
+            
+            # Enviar si es la hora del resumen y no se ha enviado hoy
+            if (current_time.hour == summary_time.hour and 
+                current_time.minute == summary_time.minute and
+                dt.datetime.now().date() != self.last_summary_date):
+                return True
+        except Exception as e:
+            self.logger.error(f"Error al verificar hora del resumen: {e}")
+        
+        return False
+    
+    def mark_summary_sent(self):
+        """Marca que se envió el resumen diario"""
+        self.last_summary_date = dt.datetime.now().date()
+
 class NotificationManager:
     """Manejador de notificaciones"""
     
@@ -517,6 +682,7 @@ class NotificationManager:
         self.config = config
         self.logger = logger
         self.bot: Optional[Bot] = None
+        self.batch_manager = NotificationBatch(config, logger)
     
     async def initialize_bot(self):
         """Inicializa el bot de Telegram"""
@@ -586,6 +752,9 @@ class BXTrenderBot:
             telegram_token = os.getenv("TELEGRAM_TOKEN", config_data.get("telegram", {}).get("token", "")).strip()
             telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", config_data.get("telegram", {}).get("chat_id", "")).strip()
             
+            # Cargar configuración de batching con valores por defecto
+            batching_config = config_data.get("telegram", {}).get("batching", {})
+            
             return BotConfig(
                 database_file=config_data["database"]["file"],
                 backfill_years=config_data["database"]["backfill_years"],
@@ -604,6 +773,13 @@ class BXTrenderBot:
                 telegram_chat_id=telegram_chat_id,
                 telegram_max_retries=config_data["telegram"]["max_retries"],
                 telegram_retry_delay_base=config_data["telegram"]["retry_delay_base"],
+                # Configuración de batching
+                batching_enabled=batching_config.get("enabled", True),
+                max_alerts_per_batch=batching_config.get("max_alerts_per_batch", 5),
+                batch_timeout_seconds=batching_config.get("batch_timeout_seconds", 30),
+                critical_states=batching_config.get("critical_states", ["green_hh", "red_ll"]),
+                summary_enabled=batching_config.get("summary_enabled", True),
+                summary_time=batching_config.get("summary_time", "18:00"),
                 log_level=config_data["logging"]["level"],
                 log_file_level=config_data["logging"]["file_level"],
                 log_console_level=config_data["logging"]["console_level"],
@@ -719,7 +895,7 @@ class BXTrenderBot:
                     continue
     
     async def process_and_notify(self):
-        """Procesa y notifica para múltiples timeframes con manejo de errores mejorado"""
+        """Procesa y notifica para múltiples timeframes con sistema de batching"""
         human_map = {
             "green_hh": "🟢💪 LIGHT GREEN (Higher High)",
             "green_lh": "🟢 GREEN (Lower High)",
@@ -727,6 +903,7 @@ class BXTrenderBot:
             "red_ll":  "🔴 RED (Lower Low)"
         }
 
+        # Procesar todos los tickers y timeframes
         for t in self.config.tickers:
             for tf in self.config.timeframes:
                 try:
@@ -761,16 +938,24 @@ class BXTrenderBot:
 
                     prev = self.db_manager.get_last_color(t, tf)
                     if prev != bx_state:
-                        human = human_map.get(bx_state, bx_state)
-                        msg = f"{t} {tf} — BX Trender cambió a {human} el {last_date}\nBX_value={bx_val:.6f}"
-                        sent = await self.notification_manager.send_message(msg)
-                        if sent:
-                            self.db_manager.save_alert(t, tf, last_date, bx_state, bx_val)
-                            self.db_manager.set_last_color(t, tf, bx_state)
-                            self.metrics.record_alert(t, tf)
-                            self.logger.info("ALERTA: %s %s %s -> %s", t, tf, last_date, bx_state)
-                        else:
-                            self.logger.warning("No se guardó alerta para %s %s porque no se pudo enviar mensaje.", t, tf)
+                        # Guardar alerta en la base de datos
+                        self.db_manager.save_alert(t, tf, last_date, bx_state, bx_val)
+                        self.db_manager.set_last_color(t, tf, bx_state)
+                        self.metrics.record_alert(t, tf)
+                        
+                        # Añadir al sistema de batching
+                        is_critical = self.notification_manager.batch_manager.add_alert(
+                            t, tf, last_date, bx_state, bx_val
+                        )
+                        
+                        # Si es crítico, enviar inmediatamente
+                        if is_critical and self.config.batching_enabled:
+                            human = human_map.get(bx_state, bx_state)
+                            critical_msg = f"🚨 *CRITICAL ALERT* 🚨\n{t} {tf} — BX Trender cambió a {human} el {last_date}\nBX_value={bx_val:.6f}"
+                            await self.notification_manager.send_message(critical_msg)
+                            self.logger.info("ALERTA CRÍTICA ENVIADA: %s %s %s -> %s", t, tf, last_date, bx_state)
+                        
+                        self.logger.info("ALERTA DETECTADA: %s %s %s -> %s", t, tf, last_date, bx_state)
                     else:
                         self.logger.debug("%s %s %s -> sin cambio (%s)", t, tf, last_date, bx_state)
                         
@@ -778,9 +963,50 @@ class BXTrenderBot:
                     self.logger.error("Error al procesar notificación para %s %s: %s", t, tf, e)
                     self.metrics.record_error("notification")
                     continue
+        
+        # Procesar batching de notificaciones
+        await self._process_batch_notifications()
+        
+        # Verificar si se debe enviar resumen diario
+        await self._check_daily_summary()
+    
+    async def _process_batch_notifications(self):
+        """Procesa las notificaciones en batch"""
+        if not self.config.batching_enabled:
+            return
+        
+        batch_manager = self.notification_manager.batch_manager
+        
+        # Enviar batch si es necesario
+        if batch_manager.should_send_batch():
+            batch_msg = batch_manager.get_batch_message()
+            if batch_msg:
+                sent = await self.notification_manager.send_message(batch_msg)
+                if sent:
+                    self.logger.info(f"Batch enviado con {len(batch_manager.pending_alerts)} alertas")
+                    batch_manager.clear_batch()
+                else:
+                    self.logger.warning("No se pudo enviar el batch de notificaciones")
+    
+    async def _check_daily_summary(self):
+        """Verifica y envía el resumen diario si es necesario"""
+        if not self.config.batching_enabled or not self.config.summary_enabled:
+            return
+        
+        batch_manager = self.notification_manager.batch_manager
+        
+        if batch_manager.should_send_daily_summary():
+            summary_msg = batch_manager.get_daily_summary()
+            if summary_msg:
+                sent = await self.notification_manager.send_message(summary_msg)
+                if sent:
+                    self.logger.info("Resumen diario enviado")
+                    batch_manager.mark_summary_sent()
+                else:
+                    self.logger.warning("No se pudo enviar el resumen diario")
     
     async def run(self):
-        """Ejecuta el bot completo"""
+        """Ejecuta el bot completo con batching continuo"""
         try:
             # Inicializar base de datos
             await asyncio.to_thread(self.db_manager.init_db)
@@ -791,8 +1017,34 @@ class BXTrenderBot:
             # Ejecutar backfill y actualizaciones
             await self.run_backfill_and_updates()
 
-            # Procesar y notificar
+            # Procesar y notificar inicial
             await self.process_and_notify()
+
+            # Bucle continuo para batching si está habilitado
+            if self.config.batching_enabled:
+                self.logger.info("Iniciando bucle de batching continuo...")
+                while True:
+                    try:
+                        # Esperar antes del siguiente ciclo
+                        await asyncio.sleep(self.config.batch_timeout_seconds)
+                        
+                        # Procesar batch pendiente
+                        await self._process_batch_notifications()
+                        
+                        # Verificar resumen diario
+                        await self._check_daily_summary()
+                        
+                        # Health check periódico
+                        if self.config.health_check_interval > 0:
+                            await self.health_check()
+                            
+                    except KeyboardInterrupt:
+                        self.logger.info("Bucle de batching interrumpido por el usuario")
+                        break
+                    except Exception as e:
+                        self.logger.error("Error en bucle de batching: %s", e)
+                        self.metrics.record_error("batching_loop")
+                        await asyncio.sleep(60)  # Esperar antes de reintentar
 
             # Health check final
             if self.config.metrics_enabled:
@@ -819,3 +1071,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
