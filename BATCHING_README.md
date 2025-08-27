@@ -4,6 +4,34 @@
 
 El sistema de batching de notificaciones evita el spam y agrupa las alertas del BX Trender Bot para hacer las notificaciones más útiles y menos intrusivas.
 
+## Configuración de Backfill por Timeframe
+
+### 🎯 Configuración Optimizada
+
+El sistema ahora permite configurar años de backfill específicos para cada timeframe:
+
+```yaml
+database:
+  backfill_years:
+    "1d": 2    # 2 años para diario (~500 puntos)
+    "1wk": 5   # 5 años para semanal (~260 puntos)
+    "1mo": 10  # 10 años para mensual (~120 puntos)
+```
+
+### 📊 Ventajas de la Configuración Específica
+
+- **Diario (1d)**: 2 años proporcionan ~500 puntos (suficiente para indicadores)
+- **Semanal (1wk)**: 5 años proporcionan ~260 puntos (muy bueno para indicadores)
+- **Mensual (1mo)**: 10 años proporcionan ~120 puntos (excelente para indicadores)
+
+### 🔄 Compatibilidad
+
+El sistema mantiene compatibilidad con configuraciones anteriores:
+```yaml
+# Configuración anterior (todavía funciona)
+backfill_years: 4
+```
+
 ## Características
 
 ### 🚀 Batching Inteligente
@@ -143,7 +171,11 @@ python bxtrender_bot.py
 
 ### Probar el Sistema
 ```bash
+# Probar el sistema de batching
 python test_batching_format.py
+
+# Probar la nueva configuración de backfill
+python test_backfill_config.py
 ```
 
 ### Deshabilitar Batching

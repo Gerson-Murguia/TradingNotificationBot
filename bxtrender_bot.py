@@ -29,7 +29,7 @@ load_dotenv()
 class BotConfig:
     """Configuración del bot"""
     database_file: str
-    backfill_years: int
+    backfill_years: Dict[str, int]  # Configuración específica por timeframe
     update_period: str
     request_delay: float
     tickers: List[str]
@@ -453,10 +453,11 @@ class DataManager:
     def backfill_ticker(self, ticker: str, timeframe: str, years: int = None):
         """Backfill inicial para un ticker y timeframe específico con manejo de errores mejorado"""
         if years is None:
-            years = self.config.backfill_years
+            # Usar configuración específica por timeframe
+            years = self.config.backfill_years.get(timeframe, 4)  # Default a 4 años si no está configurado
             
         period = f"{years}y"
-        self.logger.info(f"Iniciando backfill para {ticker} {timeframe} period={period}")
+        self.logger.info(f"Iniciando backfill para {ticker} {timeframe} period={period} ({years} años)")
         
         try:
             df = yf.download(ticker, period=period, interval=timeframe, 
@@ -797,9 +798,22 @@ class BXTrenderBot:
             # Cargar configuración de batching con valores por defecto
             batching_config = config_data.get("telegram", {}).get("batching", {})
             
+            # Cargar configuración de backfill por timeframe
+            backfill_config = config_data["database"]["backfill_years"]
+            if isinstance(backfill_config, dict):
+                backfill_years = backfill_config
+            else:
+                # Compatibilidad con configuración anterior (un solo valor)
+                default_years = backfill_config
+                backfill_years = {
+                    "1d": default_years,
+                    "1wk": default_years,
+                    "1mo": default_years
+                }
+            
             return BotConfig(
                 database_file=config_data["database"]["file"],
-                backfill_years=config_data["database"]["backfill_years"],
+                backfill_years=backfill_years,
                 update_period=config_data["database"]["update_period"],
                 request_delay=config_data["database"]["request_delay"],
                 tickers=config_data["trading"]["tickers"],

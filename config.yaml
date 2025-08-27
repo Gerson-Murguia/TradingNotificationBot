@@ -4,7 +4,11 @@
 # Configuración de la base de datos
 database:
   file: "prices.db"
-  backfill_years: 4
+  # Configuración específica por timeframe para backfill
+  backfill_years:
+    "1d": 2    # 2 años para diario (~500 puntos)
+    "1wk": 5   # 5 años para semanal (~260 puntos)
+    "1mo": 10  # 10 años para mensual (~120 puntos)
   update_period: "60d"
   request_delay: 1.0
 
