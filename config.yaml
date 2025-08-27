@@ -1,0 +1,48 @@
+# Configuración del BX Trender Bot
+# Archivo de configuración externa para facilitar cambios sin modificar código
+
+# Configuración de la base de datos
+database:
+  file: "prices.db"
+  backfill_years: 3
+  update_period: "60d"
+  request_delay: 1.0
+
+# Tickers y timeframes a monitorear
+trading:
+  tickers: ["AAPL", "MSFT", "NVDA"]
+  timeframes: ["1d", "1wk", "1mo"]  # daily, weekly, monthly
+
+# Parámetros del indicador BX Trender
+indicators:
+  # Parámetros short term
+  short_l1: 5
+  short_l2: 20
+  short_l3: 5
+  t3_length: 5
+  t3_v: 0.7
+  
+  # Parámetros long term
+  long_l1: 20
+  long_l2: 5
+
+# Configuración de Telegram
+telegram:
+  token: ""  # Se debe configurar en .env
+  chat_id: ""  # Se debe configurar en .env
+  max_retries: 3
+  retry_delay_base: 2  # Para exponential backoff
+
+# Configuración de logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file_level: "DEBUG"
+  console_level: "INFO"
+  log_dir: "logs"
+  max_log_files: 30  # Número máximo de archivos de log a mantener
+
+# Configuración de monitoreo
+monitoring:
+  health_check_interval: 300  # segundos
+  metrics_enabled: true
+  alert_on_errors: true

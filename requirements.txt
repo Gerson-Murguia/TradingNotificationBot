@@ -1,16 +1,16 @@
-# Core
-numpy==1.24.4
-pandas==2.2.3
+# Dependencias principales
+pandas>=2.0.0
+yfinance>=0.2.0
+pandas-ta>=0.3.14b0
+python-telegram-bot>=22.0.0
+python-dotenv>=1.0.0
 
-# Technical indicators (pandas-ta classic) - compatible con numpy < 1.25
-pandas-ta==0.3.14b
+# Nueva dependencia para configuración YAML
+PyYAML>=6.0
 
-# Market data and notifier
-yfinance==0.2.65
-python-telegram-bot==22.3
+# Dependencias para logging y manejo de errores
+colorama>=0.4.6
 
-# Environment variables
-python-dotenv==1.0.0
-
-# Utilities (dev/test opcional)
+# Dependencias para desarrollo y testing (opcionales)
 pytest>=7.0.0
+pytest-asyncio>=0.21.0
