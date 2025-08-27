@@ -34,12 +34,18 @@ BACKFILL_YEARS = 3
 UPDATE_PERIOD = "60d"
 REQUEST_DELAY = 1.0
 
+# BX Trender params (según tu Pine)
 SHORT_L1 = 5
 SHORT_L2 = 20
-SHORT_L3 = 15
+SHORT_L3 = 5
 T3_LENGTH = 5
 T3_V = 0.7
 
+# Parámetros "long" que aparecen en el Pine original
+LONG_L1 = 20
+LONG_L2 = 5
+
+# Telegram params
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
@@ -250,47 +256,79 @@ def _t3(series: pd.Series, length: int, v: float) -> pd.Series:
 
 # ---------------- BX Trender calc (sync) ----------------
 def compute_bx_trender_sync(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcula short_xtrender (RSI sobre EMA diff) y long_xtrender (RSI sobre EMA),
+    aplica T3 al short (ma_short_xtrender) y devuelve columnas:
+      - short_xtrender, ma_short_xtrender, bx_value
+      - long_xtrender
+      - bx_color (simple green/red según ma_short suba/baje)
+      - bx_state (== short_state) y long_state (ambos con las 4 variantes)
+    """
     dfc = df.copy()
     if "Close" not in dfc.columns:
         raise RuntimeError("DataFrame sin columna Close")
 
+    # Close como serie limpia
     close = pd.to_numeric(dfc["Close"], errors="coerce").ffill()
-    if close.dropna().shape[0] < max(SHORT_L2, SHORT_L3, T3_LENGTH) + 10:
+
+    # Requisito mínimo de datos
+    if close.dropna().shape[0] < max(SHORT_L2, SHORT_L3, T3_LENGTH, LONG_L1, LONG_L2) + 10:
         raise RuntimeError("Datos insuficientes para calcular indicadores (pide más historial)")
 
+    # --- short term (igual que Pine) ---
     ema1 = _ema(close, SHORT_L1)
     ema2 = _ema(close, SHORT_L2)
     diff = ema1 - ema2
-
     rsi_diff = _rsi(diff, SHORT_L3)
-    short_term = rsi_diff - 50
+    short_term = rsi_diff - 50  # shortTermXtrender
 
+    # ma (T3) sobre shortTerm (como en Pine)
     ma_short = _t3(short_term.ffill(), T3_LENGTH, T3_V)
 
+    # --- long term (igual que Pine) ---
+    ema_long = _ema(close, LONG_L1)
+    long_term = _rsi(ema_long, LONG_L2) - 50  # longTermXtrender
+
+    # Volcamos columnas
     dfc["short_xtrender"] = short_term
     dfc["ma_short_xtrender"] = ma_short
     dfc["bx_value"] = dfc["ma_short_xtrender"]
+    dfc["long_xtrender"] = long_term
 
+    # bx_color simple: verde si ma_short sube vs anterior, rojo si baja
     def color_from_ma_diff(x):
         if pd.isna(x):
             return None
         return "green" if x > 0 else ("red" if x < 0 else None)
-
     dfc["bx_color"] = dfc["ma_short_xtrender"].diff().apply(color_from_ma_diff)
 
+    # ----- 4 estados (exacto comportamiento Pine) -----
+    # Para short: usamos short_xtrender comparado con su previo
     prev_short = dfc["short_xtrender"].shift(1)
+    def short_state_from(curr, prev_val):
+        if pd.isna(curr) or pd.isna(prev_val):
+            return None
+        if curr > 0:
+            # curr > 0: positive -> green shades
+            return "green_hh" if curr > prev_val else "green_lh"
+        else:
+            # curr <= 0: negative -> red shades
+            return "red_hl" if curr > prev_val else "red_ll"
+    dfc["short_state"] = [short_state_from(c, p) for c, p in zip(dfc["short_xtrender"].tolist(), prev_short.tolist())]
 
-    def state_from_short(curr, prev_val):
+    # Para long: mismo criterio aplicado a long_xtrender
+    prev_long = dfc["long_xtrender"].shift(1)
+    def long_state_from(curr, prev_val):
         if pd.isna(curr) or pd.isna(prev_val):
             return None
         if curr > 0:
             return "green_hh" if curr > prev_val else "green_lh"
         else:
             return "red_hl" if curr > prev_val else "red_ll"
+    dfc["long_state"] = [long_state_from(c, p) for c, p in zip(dfc["long_xtrender"].tolist(), prev_long.tolist())]
 
-    dfc["bx_state"] = [
-        state_from_short(c, p) for c, p in zip(dfc["short_xtrender"].tolist(), prev_short.tolist())
-    ]
+    # Por compatibilidad/retro: dejamos bx_state igual al short_state (alertas actuales usan short)
+    dfc["bx_state"] = dfc["short_state"]
 
     return dfc
 
@@ -376,10 +414,10 @@ async def run_backfill_and_updates_async(tickers: List[str], timeframes: List[st
 async def process_and_notify_async(tickers: List[str], timeframes: List[str]):
     """Procesa y notifica para múltiples timeframes"""
     human_map = {
-        "green_hh": "GREEN (Higher High)",
-        "green_lh": "GREEN (Lower High)",
-        "red_hl": "RED (Higher Low)",
-        "red_ll": "RED (Lower Low)"
+        "green_hh": "🟢💪 LIGHT GREEN (Higher High)",
+        "green_lh": "🟢 GREEN (Lower High)",
+        "red_hl":  "🟠💪 LIGHT RED (Higher Low)",   
+        "red_ll":  "🔴 RED (Lower Low)"
     }
 
     for t in tickers:
