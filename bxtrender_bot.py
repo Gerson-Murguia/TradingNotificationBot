@@ -566,7 +566,7 @@ class NotificationBatch:
         return False
     
     def get_batch_message(self) -> str:
-        """Genera el mensaje del batch actual"""
+        """Genera el mensaje del batch actual agrupado por timeframe y luego por color"""
         if not self.pending_alerts:
             return ""
         
@@ -577,31 +577,51 @@ class NotificationBatch:
             "red_ll": "🔴 RED"
         }
         
-        # Agrupar por estado para mejor legibilidad
-        alerts_by_state = {}
+        # Agrupar primero por timeframe, luego por estado
+        alerts_by_timeframe = {}
         for alert in self.pending_alerts:
+            timeframe = alert['timeframe']
             state = alert['state']
-            if state not in alerts_by_state:
-                alerts_by_state[state] = []
-            alerts_by_state[state].append(alert)
+            
+            if timeframe not in alerts_by_timeframe:
+                alerts_by_timeframe[timeframe] = {}
+            
+            if state not in alerts_by_timeframe[timeframe]:
+                alerts_by_timeframe[timeframe][state] = []
+            
+            alerts_by_timeframe[timeframe][state].append(alert)
         
         # Construir mensaje
         lines = ["📊 *BATCH ALERTS - BX Trender*"]
         
-        for state, alerts in alerts_by_state.items():
-            human_state = human_map.get(state, state)
-            lines.append(f"\n*{human_state}* ({len(alerts)} signals):")
+        # Ordenar timeframes (1d, 1wk, 1mo)
+        timeframe_order = ["1d", "1wk", "1mo"]
+        sorted_timeframes = sorted(alerts_by_timeframe.keys(), 
+                                 key=lambda x: timeframe_order.index(x) if x in timeframe_order else 999)
+        
+        for timeframe in sorted_timeframes:
+            lines.append(f"\n*{timeframe.upper()}*")
             
-            for alert in alerts:
-                value_str = f" ({alert['value']:.4f})" if alert['value'] is not None else ""
-                lines.append(f"• {alert['ticker']} {alert['timeframe']} - {alert['date']}{value_str}")
+            # Ordenar estados (green_hh, green_lh, red_hl, red_ll)
+            state_order = ["green_hh", "green_lh", "red_hl", "red_ll"]
+            sorted_states = sorted(alerts_by_timeframe[timeframe].keys(),
+                                 key=lambda x: state_order.index(x) if x in state_order else 999)
+            
+            for state in sorted_states:
+                alerts = alerts_by_timeframe[timeframe][state]
+                human_state = human_map.get(state, state)
+                lines.append(f"  {human_state} ({len(alerts)}):")
+                
+                for alert in alerts:
+                    value_str = f" ({alert['value']:.4f})" if alert['value'] is not None else ""
+                    lines.append(f"    • {alert['ticker']} - {alert['date']}{value_str}")
         
         lines.append(f"\n_Generated at {dt.datetime.now().strftime('%H:%M:%S')}_")
         
         return "\n".join(lines)
     
     def get_daily_summary(self) -> str:
-        """Genera el resumen diario de alertas"""
+        """Genera el resumen diario de alertas agrupado por timeframe"""
         if not self.daily_alerts:
             return ""
         
@@ -619,18 +639,40 @@ class NotificationBatch:
             "red_ll": "🔴 RED"
         }
         
-        # Contar por estado
-        state_counts = {}
+        # Agrupar por timeframe
+        alerts_by_timeframe = {}
         for alert in today_alerts:
+            timeframe = alert['timeframe']
             state = alert['state']
-            state_counts[state] = state_counts.get(state, 0) + 1
+            
+            if timeframe not in alerts_by_timeframe:
+                alerts_by_timeframe[timeframe] = {}
+            
+            if state not in alerts_by_timeframe[timeframe]:
+                alerts_by_timeframe[timeframe][state] = 0
+            
+            alerts_by_timeframe[timeframe][state] += 1
         
         lines = [f"📈 *DAILY SUMMARY - {today.strftime('%Y-%m-%d')}*"]
         lines.append(f"Total signals: {len(today_alerts)}")
         
-        for state, count in state_counts.items():
-            human_state = human_map.get(state, state)
-            lines.append(f"• {human_state}: {count}")
+        # Ordenar timeframes (1d, 1wk, 1mo)
+        timeframe_order = ["1d", "1wk", "1mo"]
+        sorted_timeframes = sorted(alerts_by_timeframe.keys(), 
+                                 key=lambda x: timeframe_order.index(x) if x in timeframe_order else 999)
+        
+        for timeframe in sorted_timeframes:
+            lines.append(f"\n*{timeframe.upper()}*")
+            
+            # Ordenar estados (green_hh, green_lh, red_hl, red_ll)
+            state_order = ["green_hh", "green_lh", "red_hl", "red_ll"]
+            sorted_states = sorted(alerts_by_timeframe[timeframe].keys(),
+                                 key=lambda x: state_order.index(x) if x in state_order else 999)
+            
+            for state in sorted_states:
+                count = alerts_by_timeframe[timeframe][state]
+                human_state = human_map.get(state, state)
+                lines.append(f"  {human_state}: {count}")
         
         # Top tickers más activos
         ticker_counts = {}

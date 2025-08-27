@@ -7,9 +7,10 @@ El sistema de batching de notificaciones evita el spam y agrupa las alertas del 
 ## Características
 
 ### 🚀 Batching Inteligente
-- **Agrupación automática**: Las alertas se agrupan en batches en lugar de enviarse una por una
+- **Agrupación por timeframe**: Las alertas se agrupan primero por timeframe (1D, 1WK, 1MO) y luego por color
 - **Timeout configurable**: Los batches se envían después de un tiempo máximo configurable
 - **Límite de alertas**: Máximo número de alertas por mensaje
+- **Ordenamiento lógico**: Timeframes ordenados de menor a mayor, colores en orden de intensidad
 
 ### 🚨 Alertas Críticas
 - **Notificación inmediata**: Los estados críticos (`green_hh`, `red_ll`) se envían inmediatamente
@@ -51,18 +52,29 @@ telegram:
 ```
 📊 BATCH ALERTS - BX Trender
 
-🟢💪 LIGHT GREEN (2 signals):
-• AAPL 1d - 2024-01-15 (0.1234)
-• MSFT 1wk - 2024-01-15 (0.1456)
+*1D*
+  🟢💪 LIGHT GREEN (1):
+    • AAPL - 2024-01-15 (0.1234)
+  🟢 GREEN (1):
+    • MSFT - 2024-01-15 (0.0567)
+  🟠💪 LIGHT RED (1):
+    • NVDA - 2024-01-15 (-0.0234)
+  🔴 RED (1):
+    • TSLA - 2024-01-15 (-0.0891)
 
-🟢 GREEN (1 signals):
-• MSFT 1d - 2024-01-15 (0.0567)
+*1WK*
+  🟢💪 LIGHT GREEN (1):
+    • AAPL - 2024-01-15 (0.1456)
+  🟢 GREEN (1):
+    • MSFT - 2024-01-15 (0.0789)
+  🟠💪 LIGHT RED (1):
+    • GOOGL - 2024-01-15 (-0.0345)
 
-🟠💪 LIGHT RED (1 signals):
-• NVDA 1d - 2024-01-15 (-0.0234)
-
-🔴 RED (1 signals):
-• AAPL 1wk - 2024-01-15 (-0.0891)
+*1MO*
+  🟢💪 LIGHT GREEN (1):
+    • AAPL - 2024-01-15 (0.1678)
+  🔴 RED (1):
+    • NVDA - 2024-01-15 (-0.1234)
 
 _Generated at 14:30:25_
 ```
@@ -71,17 +83,27 @@ _Generated at 14:30:25_
 
 ```
 📈 DAILY SUMMARY - 2024-01-15
-Total signals: 6
+Total signals: 9
 
-• 🟢💪 LIGHT GREEN: 2
-• 🟢 GREEN: 1
-• 🟠💪 LIGHT RED: 1
-• 🔴 RED: 2
+*1D*
+  🟢💪 LIGHT GREEN: 1
+  🟢 GREEN: 1
+  🟠💪 LIGHT RED: 1
+  🔴 RED: 1
+
+*1WK*
+  🟢💪 LIGHT GREEN: 1
+  🟢 GREEN: 1
+  🟠💪 LIGHT RED: 1
+
+*1MO*
+  🟢💪 LIGHT GREEN: 1
+  🔴 RED: 1
 
 Most Active Tickers:
-• AAPL: 2 signals
+• AAPL: 3 signals
 • MSFT: 2 signals
-• NVDA: 1 signals
+• NVDA: 2 signals
 ```
 
 ## Estados Críticos
@@ -102,8 +124,9 @@ BX_value=0.123400
 
 ### ✅ Beneficios del Batching
 - **Menos spam**: Reduce el número de mensajes enviados
-- **Mejor legibilidad**: Las alertas se agrupan por estado
-- **Información contextual**: Incluye estadísticas y resúmenes
+- **Mejor legibilidad**: Las alertas se agrupan por timeframe y luego por color
+- **Organización visual**: Fácil identificación de patrones por timeframe
+- **Información contextual**: Incluye estadísticas y resúmenes organizados
 - **Flexibilidad**: Configuración adaptable a diferentes necesidades
 
 ### ⚡ Rendimiento
@@ -120,7 +143,7 @@ python bxtrender_bot.py
 
 ### Probar el Sistema
 ```bash
-python example_batching.py
+python test_batching_format.py
 ```
 
 ### Deshabilitar Batching
