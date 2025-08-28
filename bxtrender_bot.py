@@ -572,10 +572,10 @@ class NotificationBatch:
             return ""
         
         human_map = {
-            "green_hh": "🟢💪 LIGHT GREEN",
-            "green_lh": "🟢 GREEN", 
-            "red_hl": "🟠💪 LIGHT RED",
-            "red_ll": "🔴 RED"
+            "green_hh": "🟢⬆️ LIGHT GREEN",
+            "green_lh": "🟢⬇️ GREEN", 
+            "red_hl": "🟠⬆️ LIGHT RED",
+            "red_ll": "🔴⬇️ RED"
         }
         
         # Agrupar primero por timeframe, luego por estado
@@ -798,22 +798,9 @@ class BXTrenderBot:
             # Cargar configuración de batching con valores por defecto
             batching_config = config_data.get("telegram", {}).get("batching", {})
             
-            # Cargar configuración de backfill por timeframe
-            backfill_config = config_data["database"]["backfill_years"]
-            if isinstance(backfill_config, dict):
-                backfill_years = backfill_config
-            else:
-                # Compatibilidad con configuración anterior (un solo valor)
-                default_years = backfill_config
-                backfill_years = {
-                    "1d": default_years,
-                    "1wk": default_years,
-                    "1mo": default_years
-                }
-            
             return BotConfig(
                 database_file=config_data["database"]["file"],
-                backfill_years=backfill_years,
+                backfill_years=config_data["database"]["backfill_years"],
                 update_period=config_data["database"]["update_period"],
                 request_delay=config_data["database"]["request_delay"],
                 tickers=config_data["trading"]["tickers"],
