@@ -14,7 +14,10 @@ database:
 
 # Tickers y timeframes a monitorear
 trading:
-  tickers: ["AAPL", "MSFT", "NVDA"]
+  # Candidatos (watchlist) - buscar condiciones de entrada
+  candidates: ["AMD", "CDNA", "NVDA", "AAPL"]
+  # Portafolio (posiciones abiertas) - vigilar condiciones de salida/debilidad
+  portfolio: ["LULU", "DECK"]  # Ejemplo: tickers en posiciones actuales
   timeframes: ["1d", "1wk", "1mo"]  # daily, weekly, monthly
 
 # Parámetros del indicador BX Trender
@@ -30,6 +33,36 @@ indicators:
   long_l1: 20
   long_l2: 5
 
+# Configuración de confirmación multi-timeframe (hysteresis)
+confirmation:
+  # Número de cierres consecutivos requeridos por timeframe
+  daily_consecutive: 2      # N_d: 2 cierres diarios consecutivos
+  weekly_consecutive: 1     # N_w: 1 cierre semanal (conservador)
+  monthly_consecutive: 1    # N_m: 1 cierre mensual (cualquier cambio mensual pesa mucho)
+  
+  # Umbrales para filtrar señales triviales
+  bx_value_min: 0.001      # |bx_value| mínimo para considerar señal válida
+  volume_factor: 0.7       # Volumen mínimo = mediana(últimos 20) × factor
+  
+  # Configuración de priorización
+  max_alerts_per_priority: 10  # Máximo número de alertas por prioridad
+
+# Configuración de alertas accionables
+alerts:
+  # Tipos de alertas y sus acciones recomendadas
+  types:
+    high: "ALTA - Revisar para entrada"
+    medium: "MEDIA - Vigilancia, considerar"
+    critical: "CRÍTICA - Considerar salida/reducir"
+    noentry: "NO ENTRAR - No cumple requisitos para entrada"
+    info: "INFO - Cambios menores, sin acción"
+  
+  # Estados críticos que requieren atención inmediata
+  critical_states: [""]  # Estados que sugieren salida/entrada fuerte
+  
+  # Configuración de re-alerting (evitar spam)
+  re_alert_cooldown_hours: 24  # No re-alertar el mismo tipo en menos de 24h
+
 # Configuración de Telegram
 telegram:
   token: ""  # Se debe configurar en .env
@@ -41,7 +74,6 @@ telegram:
     enabled: true
     max_alerts_per_batch: 5  # Máximo número de alertas por mensaje
     batch_timeout_seconds: 30  # Tiempo máximo para agrupar alertas
-    critical_states: ["green_hh", "red_ll"]  # Estados que requieren notificación inmediata
     summary_enabled: true  # Enviar resumen diario
     summary_time: "18:00"  # Hora para enviar resumen diario (formato HH:MM)
 

@@ -2,217 +2,207 @@
 
 Un bot de trading automatizado que utiliza el indicador BX Trender para detectar señales de compra y venta en múltiples timeframes. El bot monitorea activos en tiempo real y envía alertas a través de Telegram.
 
-## 🚀 Características
-
-- **Indicador BX Trender**: Implementación completa del indicador técnico
-- **Múltiples Timeframes**: Soporte para diario, semanal y mensual
-- **Alertas en Tiempo Real**: Notificaciones automáticas vía Telegram
-- **Base de Datos Local**: Almacenamiento de precios históricos en SQLite
-- **Backfill Automático**: Descarga automática de datos históricos
-- **Batching Inteligente**: Agrupación de alertas para evitar spam
-- **Métricas y Monitoreo**: Seguimiento del rendimiento del bot
-- **Configuración Flexible**: Archivo YAML para configuración externa
-- **Logging Avanzado**: Sistema de logs con rotación automática
-
 ## 📋 Requisitos
 
 - Python 3.8 o superior
 - Cuenta de Telegram (para recibir alertas)
 - Conexión a internet
 
-## 🛠️ Instalación
+## 🚀 Características Implementadas
 
-1. **Clonar o descargar el proyecto**
-   ```bash
-   git clone <repository-url>
-   cd Trading
-   ```
+### 1. Flujos
 
-2. **Crear entorno virtual**
-   ```bash
-   python -m venv venv
-   ```
+#### 📈 **Candidatos (Watchlist)**
+- **Propósito**: Buscar condiciones de entrada
+- **Tickers**: Configurados en `config.yaml` bajo `trading.candidates`
+- **Análisis**: Patrones de entrada multi-timeframe con confirmaciones consecutivas
+- **Alertas**: ENTRY_HIGH (entrada confirmada), ENTRY_MED (vigilancia)
 
-3. **Activar entorno virtual**
-   ```bash
-   # Windows
-   venv\Scripts\activate
-   
-   # Linux/Mac
-   source venv/bin/activate
-   ```
+#### 💼 **Portafolio (Posiciones Abiertas)**
+- **Propósito**: Vigilar condiciones de salida/debilidad
+- **Tickers**: Configurados en `config.yaml` bajo `trading.portfolio`
+- **Análisis**: Patrones de debilidad y salida
+- **Alertas**: EXIT (salida urgente cuando daily + weekly en rojo confirmado)
 
-4. **Instalar dependencias**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Confirmación Multi-Timeframe (Hysteresis)
 
-5. **Configurar variables de entorno**
-   ```bash
-   cp env.example .env
-   ```
-   
-   Editar el archivo `.env` con tus credenciales:
-   ```env
-   TELEGRAM_TOKEN=tu_token_del_bot_aqui
-   TELEGRAM_CHAT_ID=tu_chat_id_aqui
-   ```
+#### 🔍 **Reglas de Confirmación**
+- **Daily**: Requiere `confirm_daily` cierres consecutivos (configurable, default: 2)
+- **Weekly**: Requiere `confirm_weekly` cierres consecutivos (configurable, default: 1)
+- **Monthly**: Requiere `confirm_monthly` cierres consecutivos (configurable, default: 1)
+
+#### 📊 **Filtros de Calidad**
+- **BX Value mínimo**: `|bx_value| ≥ bx_value_min_abs` (configurable, default: 0.0)
+- **Volumen mínimo**: `volumen_actual ≥ mediana(últimos_20) × volume_min_factor` (configurable, default: 0.5)
+
+### 3. Sistema de Scoring Inteligente
+
+#### 🎯 **Cálculo de Score**
+- **Base**: Puntajes por timeframe (Daily: 1.0x, Weekly: 1.2x, Monthly: 1.5x)
+- **Estados**: green_hh (3.0), green_lh (1.5), red_hl (-0.5), red_ll (-2.0)
+- **Bonus**: Por magnitud de bx_value (saturado en 0.5 por timeframe)
+- **Penalizaciones**: Contra-macro, pullback diario, falta de confirmaciones, volumen bajo
+
+#### ⚡ **Umbrales de Acción**
+- **ENTRY_HIGH**: Score ≥ 4.0
+- **ENTRY_MED**: Score ≥ 1.5
+- **NO_ENTRY**: Score < 1.5
+
+### 4. Patrones de Estrategia Implementados
+
+#### 📈 **Patrones de Entrada**
+- **Entrada Trending**: Confirmación sostenida en múltiples timeframes
+- **Alineación Macro**: Monthly + Weekly + Daily con pesos diferenciados
+- **Pullback en Tendencia**: Considera recuperaciones y contra-movimientos
+
+#### 📉 **Patrones de Salida**
+- **Debilidad Confirmada**: Daily + Weekly en rojo con confirmaciones consecutivas
+- **Salida Urgente**: Cuando ambos timeframes confirman debilidad
+
+### 5. Sistema de Estado y Re-Alerting
+
+#### 💾 **Persistencia de Estado**
+- **Base de datos**: Tabla `state` para estado por ticker/timeframe
+- **Historial**: Tabla `alerts_v2` para alertas multi-timeframe
+- **Re-alerting**: Cooldown configurable por tipo de alerta
+
+#### 🔄 **Hysteresis**
+- Contadores de confirmación consecutiva por timeframe
+- Evita señales falsas por ruido
+- Permite ajuste fino de sensibilidad
+
+## 📁 Estructura de Archivos
+
+```
+Trading/
+├── bxtrender_bot.py          # Bot principal implementado
+├── config.yaml               # Configuración actualizada
+├── README_V2.md              # Este archivo
+├── prices.db                 # Base de datos (tablas: prices, alerts_v2, state)
+└── logs/                     # Logs del sistema
+```
 
 ## ⚙️ Configuración
 
-### Configuración del Bot
-
-Edita el archivo `config.yaml` para personalizar el comportamiento del bot:
+### Archivo `config.yaml`
 
 ```yaml
-# Tickers a monitorear
+# Trading
 trading:
-  tickers: ["AAPL", "MSFT", "NVDA"]
+  candidates: ["LULU", "DECK", "ARE", "OLN", "CDNA", "NVDA", "AAPL", "MSFT", "TSLA", "AMD"]
+  portfolio: ["LULU", "DECK"]  # Tickers en posiciones actuales
   timeframes: ["1d", "1wk", "1mo"]
 
-# Parámetros del indicador
-indicators:
-  short_l1: 5
-  short_l2: 20
-  short_l3: 5
-  t3_length: 5
-  t3_v: 0.7
-  long_l1: 20
-  long_l2: 5
+# Confirmación multi-timeframe
+confirmations:
+  daily: 2                     # confirm_daily: cierres consecutivos diarios
+  weekly: 1                    # confirm_weekly: cierres consecutivos semanales
+  monthly: 1                   # confirm_monthly: cierres consecutivos mensuales
+  bx_value_min_abs: 0.0       # Umbral mínimo de bx_value
+  volume_min_factor: 0.5       # Factor de volumen mínimo
+
+# Alertas
+alerts:
+  types:
+    high: "ALTA - Revisar para entrada"
+    medium: "MEDIA - Vigilancia, considerar"
+    critical: "CRÍTICA - Considerar salida/reducir"
+    noentry: "NO ENTRAR - No cumple requisitos para entrada"
+    info: "INFO - Cambios menores, sin acción"
+  re_alert_cooldown_hours: 24
 ```
-
-### Configuración de Telegram
-
-1. **Crear un bot en Telegram**:
-   - Habla con [@BotFather](https://t.me/botfather)
-   - Usa el comando `/newbot`
-   - Sigue las instrucciones para crear tu bot
-
-2. **Obtener el Chat ID**:
-   - Envía un mensaje a tu bot
-   - Visita: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-   - Copia el `chat_id` de la respuesta
-
-3. **Configurar en .env**:
-   ```env
-   TELEGRAM_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-   TELEGRAM_CHAT_ID=123456789
-   ```
 
 ## 🚀 Uso
 
 ### Ejecutar el Bot
 
 ```bash
+# Activar entorno virtual
+source venv/bin/activate  # Linux/Mac
+# o
+venv\Scripts\activate     # Windows
+
+# Ejecutar bot
 python bxtrender_bot.py
 ```
 
-### Modos de Operación
+## 📊 Ejemplo de Salida
 
-El bot puede ejecutarse en diferentes modos:
+### Alerta ENTRY_HIGH (Entrada)
+```
+CANDIDATO — NVDA — ENTRY_HIGH
+Ticker: NVDA
+Acción: ENTRY_HIGH
+Prioridad: Alta
+Patrón detectado: Monthly=green_hh (2025-01-30), Weekly=green_hh (2025-01-30), Daily=green_hh (2025-01-30)
+BX values: monthly=0.023, weekly=0.018, daily=0.015
+Razón breve: base_scores: D=3.00, W=3.60, M=4.50 | bx_bonus applied
+Sugerencia rápida: Revisar niveles y calcular sizing basados en riesgo.
+ID alerta: candidate_entry_NVDA_2025-01-30
+```
 
-- **Modo Normal**: Monitoreo continuo con alertas
-- **Modo Backfill**: Descarga de datos históricos
-- **Modo Test**: Pruebas sin enviar alertas
-
-### Archivos de Log
-
-Los logs se guardan en el directorio `logs/` con rotación automática:
-- `trading_bot_YYYYMMDD.log`: Logs diarios
-- Configuración de retención en `config.yaml`
-
-## 📊 Indicador BX Trender
-
-El bot implementa el indicador BX Trender que combina:
-
-- **Señales Short Term**: Basadas en promedios móviles de corto plazo
-- **Señales Long Term**: Basadas en promedios móviles de largo plazo
-- **Filtros T3**: Suavizado de señales para reducir ruido
-
-### Estados del Indicador
-
-- 🟢 **Green HH**: Máximo más alto (señal alcista)
-- 🟢 **Green LH**: Mínimo más alto (señal alcista)
-- 🔴 **Red LL**: Mínimo más bajo (señal bajista)
-- 🔴 **Red HL**: Máximo más bajo (señal bajista)
+### Alerta EXIT (Salida)
+```
+PORTAFOLIO — TSLA — Crítica — EXIT
+Ticker: TSLA
+Acción: EXIT
+Prioridad: Crítica
+Estado detectado: Weekly=red_ll (2025-01-30), Daily=red_ll (2025-01-30)
+BX values: weekly=-0.025, daily=-0.032
+Razón breve: Daily & Weekly red confirmed
+Sugerencia rápida: considerar reducción parcial o salida completa según tu gestión de riesgo.
+ID alerta: portfolio_exit_TSLA_2025-01-30
+```
 
 ## 🔧 Personalización
 
-### Agregar Nuevos Tickers
+### Ajustar Sensibilidad
+- **Más conservador**: Aumentar `confirm_daily`, `confirm_weekly`, `confirm_monthly`
+- **Más agresivo**: Reducir confirmaciones, bajar `bx_value_min_abs`
 
-Edita `config.yaml`:
-```yaml
-trading:
-  tickers: ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL"]
-```
+### Modificar Patrones
+- Editar método `_pattern_score()` en la clase principal:
+  - Ajustar pesos por timeframe
+  - Modificar bonus/penalizaciones
+  - Cambiar umbrales de score
 
-### Modificar Parámetros del Indicador
-
-```yaml
-indicators:
-  short_l1: 3    # Más sensible
-  short_l2: 15   # Menos sensible
-  t3_v: 0.8      # Más suavizado
-```
-
-### Configurar Batching
-
-```yaml
-telegram:
-  batching:
-    enabled: true
-    max_alerts_per_batch: 10
-    batch_timeout_seconds: 60
-```
-
-## 📁 Estructura del Proyecto
-
-```
-Trading/
-├── bxtrender_bot.py      # Bot principal
-├── config.yaml           # Configuración
-├── requirements.txt      # Dependencias
-├── env.example          # Variables de entorno de ejemplo
-├── .env                 # Variables de entorno (crear)
-├── prices.db            # Base de datos SQLite
-├── state.json           # Estado del bot
-├── logs/                # Archivos de log
-│   └── trading_bot_*.log
-├── venv/                # Entorno virtual
-└── README.md           # Este archivo
-```
-
-## 🧪 Testing
-
-Ejecutar tests:
-```bash
-pytest test_*.py
-```
-
-Archivos de test disponibles:
-- `test_backfill_config.py`: Pruebas de configuración de backfill
-- `test_batching_format.py`: Pruebas de formato de batching
-- `test_telegram_bot.py`: Pruebas del bot de Telegram
+### Priorización Personalizada
+- Modificar `_determine_alert_type()` para cambiar lógica de prioridades
+- Ajustar umbrales de score en `_check_candidate_entry()`
 
 ## 📈 Métricas y Monitoreo
 
-El bot incluye un sistema de métricas que registra:
-- Alertas enviadas
-- Errores ocurridos
-- Actualizaciones de datos
-- Tiempo de actividad
-- Cálculos realizados
+### Base de Datos
+- **prices**: Datos OHLCV por ticker y timeframe
+- **alerts_v2**: Historial de alertas multi-timeframe
+- **state**: Estado actual por ticker y timeframe
 
-### Health Check
+### Logs
+- **Archivo**: `logs/trading_bot_YYYYMMDD.log`
+- **Nivel**: Configurable por consola y archivo
+- **Información**: Estados, alertas, errores, métricas
 
-El bot realiza verificaciones de salud cada 5 minutos por defecto, configurable en `config.yaml`.
+## 🔄 Características del Sistema
 
-## ⚠️ Advertencias
+### ✅ **Implementado y Funcional**
+- ✅ Flujos bien delimitados (Candidatos/Portafolio)
+- ✅ Confirmación multi-timeframe con hysteresis
+- ✅ Sistema de scoring inteligente con bonus/penalizaciones
+- ✅ Alertas diferenciadas por tipo de acción
+- ✅ Sistema de re-alerting con cooldown
+- ✅ Patrones de estrategia específicos
+- ✅ Filtros de calidad (BX value, volumen)
+- ✅ Base de datos mejorada con tablas específicas
+- ✅ Logs estructurados y métricas
+- ✅ Batching de notificaciones
+- ✅ Resumen diario automático
 
-- **No es consejo financiero**: Este bot es solo para fines educativos
-- **Riesgo de pérdida**: El trading conlleva riesgos financieros
-- **Paper Trading**: Se recomienda probar primero con datos simulados
-- **Monitoreo**: Siempre supervisa el bot durante la operación
+### 🎯 **Beneficios del Sistema**
+- **Menos ruido**: Confirmación multi-TF reduce falsos positivos
+- **Más acción**: Alertas específicas con sugerencias claras
+- **Mejor organización**: Separación clara entre watchlist y portafolio
+- **Scoring objetivo**: Sistema numérico para evaluar oportunidades
+- **Persistencia**: Estado guardado para análisis histórico
 
 ## 🐛 Solución de Problemas
 
@@ -250,6 +240,9 @@ Para soporte técnico o preguntas:
 - Verificar la configuración en `config.yaml`
 - Consultar la documentación del código
 
----
 
 **⚠️ Descargo de responsabilidad**: Este software es solo para fines educativos. El trading conlleva riesgos financieros significativos. Los desarrolladores no se hacen responsables de pérdidas financieras.
+---
+
+**BX Trender Bot** - Sistema implementado para trading algorítmico con confirmación multi-timeframe, scoring inteligente y alertas accionables.
+
